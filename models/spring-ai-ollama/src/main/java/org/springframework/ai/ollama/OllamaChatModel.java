@@ -17,24 +17,20 @@
 package org.springframework.ai.ollama;
 
 import java.time.Duration;
-import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Stream;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import io.micrometer.observation.contextpropagation.ObservationThreadLocalAccessor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.springframework.core.convert.converter.Converter;
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.ToolResponseMessage;
-import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.metadata.DefaultUsage;
@@ -57,9 +53,6 @@ import org.springframework.ai.model.tool.ToolExecutionResult;
 import org.springframework.ai.model.tool.internal.ToolCallReactiveContextHolder;
 import org.springframework.ai.ollama.api.OllamaApi;
 import org.springframework.ai.ollama.api.OllamaApi.ChatRequest;
-import org.springframework.ai.ollama.api.OllamaApi.Message.Role;
-import org.springframework.ai.ollama.api.OllamaApi.Message.ToolCall;
-import org.springframework.ai.ollama.api.OllamaApi.Message.ToolCallFunction;
 import org.springframework.ai.ollama.api.OllamaModel;
 import org.springframework.ai.ollama.api.OllamaOptions;
 import org.springframework.ai.ollama.api.common.OllamaApiConstants;
@@ -68,7 +61,6 @@ import org.springframework.ai.ollama.management.OllamaModelManager;
 import org.springframework.ai.ollama.management.PullModelStrategy;
 import org.springframework.ai.retry.RetryUtils;
 import org.springframework.ai.tool.definition.ToolDefinition;
-import org.springframework.ai.util.json.JsonParser;
 import org.springframework.retry.support.RetryTemplate;
 import org.springframework.util.Assert;
 import org.springframework.util.CollectionUtils;
@@ -88,11 +80,10 @@ import org.springframework.util.StringUtils;
  * @author Alexandros Pappas
  * @author Ilayaperumal Gopinathan
  * @author Sun Yuhan
+ * @author Nicolas Krier
  * @since 1.0.0
  */
 public class OllamaChatModel implements ChatModel {
-
-	private static final Logger logger = LoggerFactory.getLogger(OllamaChatModel.class);
 
 	private static final String DONE = "done";
 
@@ -114,6 +105,8 @@ public class OllamaChatModel implements ChatModel {
 
 	private static final ToolCallingManager DEFAULT_TOOL_CALLING_MANAGER = ToolCallingManager.builder().build();
 
+	private static final OllamaMessageConverter DEFAULT_MESSAGE_CONVERTER = new OllamaMessageConverter();
+
 	private final OllamaApi chatApi;
 
 	private final OllamaOptions defaultOptions;
@@ -131,6 +124,8 @@ public class OllamaChatModel implements ChatModel {
 	private final ToolExecutionEligibilityPredicate toolExecutionEligibilityPredicate;
 
 	private ChatModelObservationConvention observationConvention = DEFAULT_OBSERVATION_CONVENTION;
+
+	private Converter<Message, Stream<OllamaApi.Message>> messageConverter = DEFAULT_MESSAGE_CONVERTER;
 
 	private final RetryTemplate retryTemplate;
 
@@ -233,7 +228,7 @@ public class OllamaChatModel implements ChatModel {
 
 	private ChatResponse internalCall(Prompt prompt, ChatResponse previousChatResponse) {
 
-		OllamaApi.ChatRequest request = ollamaChatRequest(prompt, false);
+		ChatRequest request = ollamaChatRequest(prompt, false);
 
 		ChatModelObservationContext observationContext = ChatModelObservationContext.builder()
 			.prompt(prompt)
@@ -303,7 +298,7 @@ public class OllamaChatModel implements ChatModel {
 
 	private Flux<ChatResponse> internalStream(Prompt prompt, ChatResponse previousChatResponse) {
 		return Flux.deferContextual(contextView -> {
-			OllamaApi.ChatRequest request = ollamaChatRequest(prompt, true);
+			ChatRequest request = ollamaChatRequest(prompt, true);
 
 			final ChatModelObservationContext observationContext = ChatModelObservationContext.builder()
 				.prompt(prompt)
@@ -436,47 +431,15 @@ public class OllamaChatModel implements ChatModel {
 	/**
 	 * Package access for testing.
 	 */
-	OllamaApi.ChatRequest ollamaChatRequest(Prompt prompt, boolean stream) {
-
-		List<OllamaApi.Message> ollamaMessages = prompt.getInstructions().stream().map(message -> {
-			if (message instanceof UserMessage userMessage) {
-				var messageBuilder = OllamaApi.Message.builder(Role.USER).content(message.getText());
-				if (!CollectionUtils.isEmpty(userMessage.getMedia())) {
-					messageBuilder.images(
-							userMessage.getMedia().stream().map(media -> this.fromMediaData(media.getData())).toList());
-				}
-				return List.of(messageBuilder.build());
-			}
-			else if (message instanceof SystemMessage systemMessage) {
-				return List.of(OllamaApi.Message.builder(Role.SYSTEM).content(systemMessage.getText()).build());
-			}
-			else if (message instanceof AssistantMessage assistantMessage) {
-				List<ToolCall> toolCalls = null;
-				if (!CollectionUtils.isEmpty(assistantMessage.getToolCalls())) {
-					toolCalls = assistantMessage.getToolCalls().stream().map(toolCall -> {
-						var function = new ToolCallFunction(toolCall.name(),
-								JsonParser.fromJson(toolCall.arguments(), new TypeReference<>() {
-								}));
-						return new ToolCall(function);
-					}).toList();
-				}
-				return List.of(OllamaApi.Message.builder(Role.ASSISTANT)
-					.content(assistantMessage.getText())
-					.toolCalls(toolCalls)
-					.build());
-			}
-			else if (message instanceof ToolResponseMessage toolMessage) {
-				return toolMessage.getResponses()
-					.stream()
-					.map(tr -> OllamaApi.Message.builder(Role.TOOL).content(tr.responseData()).build())
-					.toList();
-			}
-			throw new IllegalArgumentException("Unsupported message type: " + message.getMessageType());
-		}).flatMap(List::stream).toList();
+	ChatRequest ollamaChatRequest(Prompt prompt, boolean stream) {
+		List<OllamaApi.Message> ollamaMessages = prompt.getInstructions()
+			.stream()
+			.flatMap(this.messageConverter::convert)
+			.toList();
 
 		OllamaOptions requestOptions = (OllamaOptions) prompt.getOptions();
 
-		OllamaApi.ChatRequest.Builder requestBuilder = OllamaApi.ChatRequest.builder(requestOptions.getModel())
+		ChatRequest.Builder requestBuilder = ChatRequest.builder(requestOptions.getModel())
 			.stream(stream)
 			.messages(ollamaMessages)
 			.options(requestOptions);
@@ -495,19 +458,6 @@ public class OllamaChatModel implements ChatModel {
 		}
 
 		return requestBuilder.build();
-	}
-
-	private String fromMediaData(Object mediaData) {
-		if (mediaData instanceof byte[] bytes) {
-			return Base64.getEncoder().encodeToString(bytes);
-		}
-		else if (mediaData instanceof String text) {
-			return text;
-		}
-		else {
-			throw new IllegalArgumentException("Unsupported media data type: " + mediaData.getClass().getSimpleName());
-		}
-
 	}
 
 	private List<ChatRequest.Tool> getTools(List<ToolDefinition> toolDefinitions) {
@@ -539,6 +489,15 @@ public class OllamaChatModel implements ChatModel {
 	public void setObservationConvention(ChatModelObservationConvention observationConvention) {
 		Assert.notNull(observationConvention, "observationConvention cannot be null");
 		this.observationConvention = observationConvention;
+	}
+
+	/**
+	 * Use the provided message converter during chat request creation
+	 * @param messageConverter The provided message converter
+	 */
+	public void setMessageConverter(Converter<Message, Stream<OllamaApi.Message>> messageConverter) {
+		Assert.notNull(messageConverter, "messageConverter cannot be null");
+		this.messageConverter = messageConverter;
 	}
 
 	public static final class Builder {
