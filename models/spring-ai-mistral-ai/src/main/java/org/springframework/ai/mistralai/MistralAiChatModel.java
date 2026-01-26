@@ -500,8 +500,8 @@ public class MistralAiChatModel implements ChatModel {
 		Object content = message.getText();
 
 		if (message instanceof UserMessage userMessage && !CollectionUtils.isEmpty(userMessage.getMedia())) {
-			List<ChatCompletionMessage.MediaContent> contentList = new ArrayList<>(
-					List.of(new ChatCompletionMessage.MediaContent(message.getText())));
+			List<MistralAiApi.ContentChunk> contentList = new ArrayList<>(
+					List.of(new MistralAiApi.TextChunk(message.getText())));
 			contentList.addAll(userMessage.getMedia().stream().map(this::mapToMediaContent).toList());
 			content = contentList;
 		}
@@ -515,9 +515,10 @@ public class MistralAiChatModel implements ChatModel {
 		return new ToolCall(toolCall.id(), toolCall.type(), function, null);
 	}
 
-	private ChatCompletionMessage.MediaContent mapToMediaContent(Media media) {
-		return new ChatCompletionMessage.MediaContent(new ChatCompletionMessage.MediaContent.ImageUrl(
-				this.fromMediaData(media.getMimeType(), media.getData())));
+	private MistralAiApi.ImageUrlChunk mapToMediaContent(Media media) {
+		var url = this.fromMediaData(media.getMimeType(), media.getData());
+
+		return new MistralAiApi.ImageUrlChunk(new MistralAiApi.ImageUrlChunk.ImageUrl(url));
 	}
 
 	private String fromMediaData(MimeType mimeType, Object mediaContentData) {

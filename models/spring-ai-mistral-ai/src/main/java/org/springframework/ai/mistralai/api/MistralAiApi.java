@@ -16,6 +16,8 @@
 
 package org.springframework.ai.mistralai.api;
 
+import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -29,6 +31,17 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonSubTypes;
+import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.databind.JsonDeserializer;
+import com.fasterxml.jackson.databind.JsonSerializer;
+import com.fasterxml.jackson.databind.SerializerProvider;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -132,7 +145,7 @@ public class MistralAiApi {
 
 		// The input must not an empty string, and any array must be 1024 dimensions or
 		// less.
-		if (embeddingRequest.input() instanceof List list) {
+		if (embeddingRequest.input() instanceof List<?> list) {
 			Assert.isTrue(!CollectionUtils.isEmpty(list), "The input list can not be empty.");
 			Assert.isTrue(list.size() <= 1024, "The list must be 1024 dimensions or less");
 			Assert.isTrue(
@@ -217,7 +230,47 @@ public class MistralAiApi {
 	 *
 	 * @since 1.0.0
 	 */
-	public sealed interface ContentChunk permits TextChunk, ThinkChunk, ReferenceChunk {
+	@JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type")
+	// @formatter:off
+	@JsonSubTypes({
+			@JsonSubTypes.Type(value = ImageUrlChunk.class, name = "image_url"),
+			@JsonSubTypes.Type(value = ReferenceChunk.class, name = "reference"),
+			@JsonSubTypes.Type(value = TextChunk.class, name = "text"),
+			@JsonSubTypes.Type(value = ThinkChunk.class, name = "thinking")
+	})
+	// @formatter:on
+	public sealed interface ContentChunk permits ImageUrlChunk, ReferenceChunk, TextChunk, ThinkChunk {
+
+	}
+
+	@JsonInclude(Include.NON_NULL)
+	@JsonIgnoreProperties(ignoreUnknown = true)
+	public record ImageUrlChunk(@JsonProperty("image_url") ImageUrlChunk.ImageUrl imageUrl) implements ContentChunk {
+
+		@JsonInclude(Include.NON_NULL)
+		public record ImageUrl(
+		// @formatter:off
+				@JsonProperty("url") String url,
+				@JsonProperty("detail") String detail
+				// @formatter:on
+		) {
+
+			public ImageUrl(String url) {
+				this(url, null);
+			}
+
+		}
+
+	}
+
+	/**
+	 * A reference content chunk containing citation reference IDs.
+	 *
+	 * @param referenceIds list of reference IDs for citations
+	 */
+	@JsonInclude(Include.NON_NULL)
+	@JsonIgnoreProperties(ignoreUnknown = true)
+	public record ReferenceChunk(@JsonProperty("reference_ids") List<Integer> referenceIds) implements ContentChunk {
 
 	}
 
@@ -236,22 +289,12 @@ public class MistralAiApi {
 	 * A thinking/reasoning content chunk from Magistral models. Contains the model's
 	 * intermediate reasoning process.
 	 *
-	 * @param thinking the thinking/reasoning content
+	 * @param thinking the thinking/reasoning content, either {@link ReferenceChunk} or
+	 * {@link TextChunk}
 	 */
 	@JsonInclude(Include.NON_NULL)
 	@JsonIgnoreProperties(ignoreUnknown = true)
-	public record ThinkChunk(@JsonProperty("thinking") String thinking) implements ContentChunk {
-
-	}
-
-	/**
-	 * A reference content chunk containing citation reference IDs.
-	 *
-	 * @param referenceIds list of reference IDs for citations
-	 */
-	@JsonInclude(Include.NON_NULL)
-	@JsonIgnoreProperties(ignoreUnknown = true)
-	public record ReferenceChunk(@JsonProperty("reference_ids") List<Integer> referenceIds) implements ContentChunk {
+	public record ThinkChunk(@JsonProperty("thinking") List<ContentChunk> thinking) implements ContentChunk {
 
 	}
 
@@ -1149,8 +1192,9 @@ public class MistralAiApi {
 	/**
 	 * Message comprising the conversation.
 	 *
-	 * @param rawContent The contents of the message. Can be either a {@link MediaContent}
-	 * or a {@link String}. The response message content is always a {@link String}.
+	 * @param rawContent The contents of the message. Can be either a list of
+	 * {@link ContentChunk} or a {@link String}. The response message content is always a
+	 * {@link String}.
 	 * @param role The role of the messages author. Could be one of the {@link Role}
 	 * types.
 	 * @param name The name of the author of the message.
@@ -1163,7 +1207,8 @@ public class MistralAiApi {
 	@JsonIgnoreProperties(ignoreUnknown = true)
 	public record ChatCompletionMessage(
 	// @formatter:off
-		@JsonProperty("content") Object rawContent,
+	    @JsonSerialize(using = ContentSerializer.class) @JsonDeserialize(using = ContentDeserializer.class)
+	    @JsonProperty("content") Object rawContent,
 		@JsonProperty("role") Role role,
 		@JsonProperty("name") String name,
 		@JsonProperty("tool_calls") List<ToolCall> toolCalls,
@@ -1204,22 +1249,20 @@ public class MistralAiApi {
 			if (this.rawContent instanceof String text) {
 				return text;
 			}
-			if (this.rawContent instanceof List<?> blocks) {
-				StringBuilder textBuilder = new StringBuilder();
-				for (Object block : blocks) {
-					if (block instanceof Map<?, ?> map && "text".equals(map.get("type"))) {
-						Object text = map.get("text");
-						if (text instanceof String s) {
-							if (!textBuilder.isEmpty()) {
-								textBuilder.append("\n");
-							}
-							textBuilder.append(s);
-						}
+			if (this.rawContent instanceof List<?> list) {
+				var textBuilder = new StringBuilder();
+
+				for (var object : list) {
+					if (object instanceof TextChunk textChunk) {
+						textBuilder.append(textChunk.text());
+						textBuilder.append(System.lineSeparator());
 					}
 				}
+
 				return textBuilder.isEmpty() ? null : textBuilder.toString();
 			}
-			throw new IllegalStateException("Unexpected content type: " + rawContent.getClass());
+
+			throw new IllegalStateException("Unexpected content type %s!".formatted(this.rawContent.getClass()));
 		}
 
 		/**
@@ -1234,102 +1277,97 @@ public class MistralAiApi {
 			if (this.rawContent instanceof String) {
 				return null;
 			}
-			if (this.rawContent instanceof List<?> blocks) {
-				StringBuilder thinkingBuilder = new StringBuilder();
-				for (Object block : blocks) {
-					if (block instanceof Map<?, ?> map && "thinking".equals(map.get("type"))) {
-						Object thinking = map.get("thinking");
-						if (thinking instanceof List<?> thinkingBlocks) {
-							for (Object thinkingBlock : thinkingBlocks) {
-								if (thinkingBlock instanceof Map<?, ?> thinkingMap
-										&& "text".equals(thinkingMap.get("type"))) {
-									Object text = thinkingMap.get("text");
-									if (text instanceof String s) {
-										if (!thinkingBuilder.isEmpty()) {
-											thinkingBuilder.append("\n");
-										}
-										thinkingBuilder.append(s);
-									}
-								}
+			if (this.rawContent instanceof List<?> list) {
+				var thinkingBuilder = new StringBuilder();
+
+				for (Object object : list) {
+					if (object instanceof ThinkChunk thinkChunk) {
+						for (var contentChunk : thinkChunk.thinking()) {
+							if (contentChunk instanceof TextChunk textChunk) {
+								thinkingBuilder.append("thinking text:");
+								thinkingBuilder.append(System.lineSeparator());
+								thinkingBuilder.append(textChunk.text());
+								thinkingBuilder.append(System.lineSeparator());
 							}
-						}
-						else if (thinking instanceof String s) {
-							if (!thinkingBuilder.isEmpty()) {
-								thinkingBuilder.append("\n");
+
+							if (contentChunk instanceof ReferenceChunk referenceChunk) {
+								thinkingBuilder.append("thinking reference ids:");
+								thinkingBuilder.append(System.lineSeparator());
+								thinkingBuilder.append(referenceChunk.referenceIds());
+								thinkingBuilder.append(System.lineSeparator());
 							}
-							thinkingBuilder.append(s);
 						}
 					}
 				}
+
 				return thinkingBuilder.isEmpty() ? null : thinkingBuilder.toString();
 			}
-			return null;
+
+			throw new IllegalStateException("Unexpected content type %s!".formatted(this.rawContent.getClass()));
 		}
 
-		/**
-		 * Parses the raw content into a list of typed ContentChunk objects. For string
-		 * content, returns a single TextChunk. For array content from Magistral models,
-		 * parses each block into its appropriate type.
-		 * @return list of ContentChunk objects, or empty list if content is null
-		 */
-		@SuppressWarnings("unchecked")
-		public List<ContentChunk> contentChunks() {
-			if (this.rawContent == null) {
-				return List.of();
-			}
-			if (this.rawContent instanceof String text) {
-				return List.of(new TextChunk(text));
-			}
-			if (this.rawContent instanceof List<?> blocks) {
-				List<ContentChunk> chunks = new java.util.ArrayList<>();
-				for (Object block : blocks) {
-					if (block instanceof Map<?, ?> map) {
-						String type = (String) map.get("type");
-						if ("text".equals(type)) {
-							String text = (String) map.get("text");
-							if (text != null) {
-								chunks.add(new TextChunk(text));
-							}
+		public static class ContentSerializer extends JsonSerializer<Object> {
+
+			@Override
+			public void serialize(Object value, JsonGenerator jsonGenerator, SerializerProvider serializerProvider)
+					throws IOException {
+				if (value == null) {
+					jsonGenerator.writeNull();
+				}
+				else if (value instanceof String text) {
+					jsonGenerator.writeString(text);
+				}
+				else if (value instanceof List<?> list) {
+					jsonGenerator.writeStartArray();
+
+					for (var object : list) {
+						if (object instanceof ContentChunk contentChunk) {
+							jsonGenerator.writeObject(contentChunk);
 						}
-						else if ("thinking".equals(type)) {
-							Object thinking = map.get("thinking");
-							if (thinking instanceof List<?> thinkingBlocks) {
-								StringBuilder thinkingBuilder = new StringBuilder();
-								for (Object thinkingBlock : thinkingBlocks) {
-									if (thinkingBlock instanceof Map<?, ?> thinkingMap
-											&& "text".equals(thinkingMap.get("type"))) {
-										Object text = thinkingMap.get("text");
-										if (text instanceof String s) {
-											if (!thinkingBuilder.isEmpty()) {
-												thinkingBuilder.append("\n");
-											}
-											thinkingBuilder.append(s);
-										}
-									}
-								}
-								if (!thinkingBuilder.isEmpty()) {
-									chunks.add(new ThinkChunk(thinkingBuilder.toString()));
-								}
-							}
-							else if (thinking instanceof String s) {
-								chunks.add(new ThinkChunk(s));
-							}
-						}
-						else if ("reference".equals(type)) {
-							Object refIds = map.get("reference_ids");
-							if (refIds instanceof List<?> ids) {
-								List<Integer> referenceIds = ((List<Object>) ids).stream()
-									.filter(id -> id instanceof Number)
-									.map(id -> ((Number) id).intValue())
-									.toList();
-								chunks.add(new ReferenceChunk(referenceIds));
-							}
+						else {
+							throw new IllegalArgumentException(
+									"Unexpected value type %s in the list!".formatted(value));
 						}
 					}
+
+					jsonGenerator.writeEndArray();
 				}
-				return chunks;
+				else {
+					throw new IllegalArgumentException("Unexpected value type %s!".formatted(value));
+				}
 			}
-			return List.of();
+
+		}
+
+		public static class ContentDeserializer extends JsonDeserializer<Object> {
+
+			@Override
+			public Object deserialize(JsonParser jsonParser, DeserializationContext deserializationContext)
+					throws IOException {
+				var jsonToken = jsonParser.currentToken();
+
+				if (jsonToken == JsonToken.VALUE_STRING) {
+					return jsonParser.getValueAsString();
+				}
+
+				if (jsonToken == JsonToken.START_ARRAY) {
+					List<ContentChunk> contentChunks = new ArrayList<>();
+
+					while (jsonParser.nextToken() != JsonToken.END_ARRAY) {
+						jsonToken = jsonParser.currentToken();
+
+						if (jsonToken == JsonToken.START_OBJECT) {
+							var contentChunk = jsonParser.readValueAs(ContentChunk.class);
+							contentChunks.add(contentChunk);
+						}
+					}
+
+					return List.copyOf(contentChunks);
+				}
+
+				throw new IllegalStateException("Unexpected JSON token %s!".formatted(jsonToken));
+			}
+
 		}
 
 		/**
@@ -1392,7 +1430,9 @@ public class MistralAiApi {
 		 * @param type Content type, each can be of type text or image_url.
 		 * @param text The text content of the message.
 		 * @param imageUrl The image content of the message.
+		 * @deprecated Use {@link ContentChunk} instead.
 		 */
+		@Deprecated(forRemoval = true)
 		@JsonInclude(Include.NON_NULL)
 		@JsonIgnoreProperties(ignoreUnknown = true)
 		public record MediaContent(

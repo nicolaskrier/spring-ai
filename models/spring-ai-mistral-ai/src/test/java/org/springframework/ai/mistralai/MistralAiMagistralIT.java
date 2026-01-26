@@ -1,5 +1,5 @@
 /*
- * Copyright 2023-2025 the original author or authors.
+ * Copyright 2026-2026 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package org.springframework.ai.mistralai;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.Test;
@@ -123,22 +124,41 @@ class MistralAiMagistralIT {
 
 		Prompt prompt = new Prompt("What is 25 * 4? Think step by step.", promptOptions);
 
-		String aggregatedContent = this.streamingChatModel.stream(prompt)
-			.collectList()
-			.block()
-			.stream()
+		// @formatter:off
+		var chatResponses = this.streamingChatModel.stream(prompt)
+				.collectList()
+				.block();
+		// @formatter:on
+
+		assertThat(chatResponses).isNotNull();
+
+		var aggregatedContent = chatResponses.stream()
 			.map(ChatResponse::getResults)
 			.flatMap(List::stream)
 			.map(Generation::getOutput)
 			.map(AssistantMessage::getText)
-			.filter(text -> text != null)
+			.filter(Objects::nonNull)
 			.collect(Collectors.joining());
 
 		assertThat(aggregatedContent).isNotEmpty();
 		// The answer should contain 100 (25 * 4 = 100)
 		assertThat(aggregatedContent).containsAnyOf("100", "one hundred");
 
-		logger.info("Streamed response: {}", aggregatedContent);
+		logger.info("Streamed response aggregated content: {}", aggregatedContent);
+
+		var aggregatedThinkingContent = chatResponses.stream()
+			.map(ChatResponse::getResults)
+			.flatMap(List::stream)
+			.map(Generation::getOutput)
+			.filter(MistralAiAssistantMessage.class::isInstance)
+			.map(MistralAiAssistantMessage.class::cast)
+			.map(MistralAiAssistantMessage::getThinkingContent)
+			.filter(Objects::nonNull)
+			.collect(Collectors.joining());
+
+		assertThat(aggregatedThinkingContent).isNotEmpty();
+
+		logger.info("Streamed response aggregated thinking content: {}", aggregatedThinkingContent);
 	}
 
 	@Test
@@ -146,9 +166,11 @@ class MistralAiMagistralIT {
 		List<Message> messages = new ArrayList<>();
 		messages.add(new UserMessage("What is 5 + 3?"));
 
+		// @formatter:off
 		var promptOptions = MistralAiChatOptions.builder()
 			.model(MistralAiApi.ChatModel.MAGISTRAL_SMALL.getValue())
 			.build();
+		// @formatter:on
 
 		// First round
 		Prompt prompt1 = new Prompt(messages, promptOptions);
@@ -156,7 +178,7 @@ class MistralAiMagistralIT {
 
 		assertThat(response1).isNotNull();
 		MistralAiAssistantMessage message1 = (MistralAiAssistantMessage) response1.getResult().getOutput();
-		assertThat(message1.getText()).containsAnyOf("8", "eight");
+		assertThat(message1.getText()).isNotNull().containsAnyOf("8", "eight");
 
 		logger.info("First response thinking: {}", message1.getThinkingContent());
 		logger.info("First response: {}", message1.getText());
