@@ -37,8 +37,9 @@ import org.springframework.util.CollectionUtils;
 
 /**
  * Helper class to support Streaming function calling.
- *
+ * <p>
  * It can merge the streamed ChatCompletionChunk in case of function calling message.
+ * </p>
  *
  * @author Christian Tzolov
  * @since 0.8.1
@@ -93,7 +94,7 @@ public class MistralAiStreamFunctionCallingHelper {
 
 					var role = current.delta().role() != null ? current.delta().role() : Role.ASSISTANT;
 					current = new ChunkChoice(
-							current.index(), new ChatCompletionMessage(current.delta().content(), role,
+							current.index(), new ChatCompletionMessage(current.delta().extractContent(), role,
 									current.delta().name(), toolCallsWithID),
 							current.finishReason(), current.logprobs());
 				}
@@ -112,8 +113,8 @@ public class MistralAiStreamFunctionCallingHelper {
 	}
 
 	private ChatCompletionMessage merge(ChatCompletionMessage previous, ChatCompletionMessage current) {
-		String content = (current.content() != null ? current.content()
-				: (previous.content() != null) ? previous.content() : "");
+		String content = (current.extractContent() != null ? current.extractContent()
+				: (previous.extractContent() != null) ? previous.extractContent() : "");
 		Role role = (current.role() != null ? current.role() : previous.role());
 		role = (role != null ? role : Role.ASSISTANT); // default to ASSISTANT (if null
 		String name = (current.name() != null ? current.name() : previous.name());
@@ -207,4 +208,3 @@ public class MistralAiStreamFunctionCallingHelper {
 	}
 
 }
-// ---
