@@ -31,6 +31,8 @@ import org.jspecify.annotations.Nullable;
 
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.mistralai.api.MistralAiApi;
+import org.springframework.ai.mistralai.api.MistralAiApi.ChatCompletionRequest.PromptMode;
+import org.springframework.ai.mistralai.api.MistralAiApi.ChatCompletionRequest.ReasoningEffort;
 import org.springframework.ai.mistralai.api.MistralAiApi.ChatCompletionRequest.ResponseFormat;
 import org.springframework.ai.mistralai.api.MistralAiApi.ChatCompletionRequest.ToolChoice;
 import org.springframework.ai.mistralai.api.MistralAiApi.FunctionTool;
@@ -50,6 +52,7 @@ import org.springframework.util.Assert;
  * @author Alexandros Pappas
  * @author Jason Smith
  * @author Sebastien Deleuze
+ * @author Nicolas Krier
  * @since 0.8.1
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -105,6 +108,20 @@ public class MistralAiChatOptions implements ToolCallingChatOptions, StructuredO
 	 * when providing an array.
 	 */
 	private @JsonProperty("stop") @Nullable List<String> stop;
+
+	/**
+	 * Represents high-level intent. Assignment to actual system prompts is handled
+	 * internally. System prompt may include knowledge cutoff date, model capabilities,
+	 * tone to use, safety guidelines, etc.
+	 */
+	private @JsonProperty("prompt_mode") @Nullable PromptMode promptMode;
+
+	/**
+	 * Controls the reasoning effort level for reasoning models.
+	 * {@link ReasoningEffort#HIGH} enables comprehensive reasoning traces,
+	 * {@link ReasoningEffort#NONE} disables reasoning effort.
+	 */
+	private @JsonProperty("reasoning_effort") @Nullable ReasoningEffort reasoningEffort;
 
 	/**
 	 * Number between -2.0 and 2.0. frequency_penalty penalizes the repetition of words
@@ -171,7 +188,8 @@ public class MistralAiChatOptions implements ToolCallingChatOptions, StructuredO
 
 	protected MistralAiChatOptions(String model, @Nullable Double temperature, @Nullable Double topP,
 			@Nullable Integer maxTokens, @Nullable Boolean safePrompt, @Nullable Integer randomSeed,
-			@Nullable ResponseFormat responseFormat, @Nullable List<String> stop, @Nullable Double frequencyPenalty,
+			@Nullable ResponseFormat responseFormat, @Nullable List<String> stop, @Nullable PromptMode promptMode,
+			@Nullable ReasoningEffort reasoningEffort, @Nullable Double frequencyPenalty,
 			@Nullable Double presencePenalty, @Nullable Integer n, @Nullable List<FunctionTool> tools,
 			@Nullable ToolChoice toolChoice, @Nullable List<ToolCallback> toolCallbacks,
 			@Nullable Set<String> toolNames, @Nullable Boolean internalToolExecutionEnabled,
@@ -189,6 +207,8 @@ public class MistralAiChatOptions implements ToolCallingChatOptions, StructuredO
 		this.randomSeed = randomSeed;
 		this.responseFormat = responseFormat;
 		this.stop = stop;
+		this.promptMode = promptMode;
+		this.reasoningEffort = reasoningEffort;
 		if (frequencyPenalty != null) {
 			this.frequencyPenalty = frequencyPenalty;
 		}
@@ -277,6 +297,22 @@ public class MistralAiChatOptions implements ToolCallingChatOptions, StructuredO
 
 	public void setStop(@Nullable List<String> stop) {
 		this.stop = stop;
+	}
+
+	public @Nullable PromptMode getPromptMode() {
+		return this.promptMode;
+	}
+
+	public void setPromptMode(@Nullable PromptMode promptMode) {
+		this.promptMode = promptMode;
+	}
+
+	public @Nullable ReasoningEffort getReasoningEffort() {
+		return this.reasoningEffort;
+	}
+
+	public void setReasoningEffort(@Nullable ReasoningEffort reasoningEffort) {
+		this.reasoningEffort = reasoningEffort;
 	}
 
 	public @Nullable List<FunctionTool> getTools() {
@@ -428,6 +464,8 @@ public class MistralAiChatOptions implements ToolCallingChatOptions, StructuredO
 			.maxTokens(this.maxTokens)
 			.presencePenalty(this.presencePenalty)
 			.stop(this.stop == null ? null : new ArrayList<>(this.stop))
+			.promptMode(this.promptMode)
+			.reasoningEffort(this.reasoningEffort)
 			.temperature(this.temperature)
 			.topP(this.topP)
 			.topK(this.getTopK()) // always null but here for consistency
@@ -448,8 +486,9 @@ public class MistralAiChatOptions implements ToolCallingChatOptions, StructuredO
 	@Override
 	public int hashCode() {
 		return Objects.hash(this.model, this.temperature, this.topP, this.maxTokens, this.safePrompt, this.randomSeed,
-				this.responseFormat, this.stop, this.frequencyPenalty, this.presencePenalty, this.n, this.tools,
-				this.toolChoice, this.toolCallbacks, this.tools, this.internalToolExecutionEnabled, this.toolContext);
+				this.responseFormat, this.stop, this.promptMode, this.reasoningEffort, this.frequencyPenalty,
+				this.presencePenalty, this.n, this.tools, this.toolChoice, this.toolCallbacks, this.tools,
+				this.internalToolExecutionEnabled, this.toolContext);
 	}
 
 	@Override
@@ -464,18 +503,27 @@ public class MistralAiChatOptions implements ToolCallingChatOptions, StructuredO
 
 		MistralAiChatOptions other = (MistralAiChatOptions) obj;
 
-		return Objects.equals(this.model, other.model) && Objects.equals(this.temperature, other.temperature)
-				&& Objects.equals(this.topP, other.topP) && Objects.equals(this.maxTokens, other.maxTokens)
+		// @formatter:off
+		return Objects.equals(this.model, other.model)
+				&& Objects.equals(this.temperature, other.temperature)
+				&& Objects.equals(this.topP, other.topP)
+				&& Objects.equals(this.maxTokens, other.maxTokens)
 				&& Objects.equals(this.safePrompt, other.safePrompt)
 				&& Objects.equals(this.randomSeed, other.randomSeed)
-				&& Objects.equals(this.responseFormat, other.responseFormat) && Objects.equals(this.stop, other.stop)
+				&& Objects.equals(this.responseFormat, other.responseFormat)
+				&& Objects.equals(this.stop, other.stop)
+				&& Objects.equals(this.promptMode, other.promptMode)
+				&& Objects.equals(this.reasoningEffort, other.reasoningEffort)
 				&& Objects.equals(this.frequencyPenalty, other.frequencyPenalty)
-				&& Objects.equals(this.presencePenalty, other.presencePenalty) && Objects.equals(this.n, other.n)
-				&& Objects.equals(this.tools, other.tools) && Objects.equals(this.toolChoice, other.toolChoice)
+				&& Objects.equals(this.presencePenalty, other.presencePenalty)
+				&& Objects.equals(this.n, other.n)
+				&& Objects.equals(this.tools, other.tools)
+				&& Objects.equals(this.toolChoice, other.toolChoice)
 				&& Objects.equals(this.toolCallbacks, other.toolCallbacks)
 				&& Objects.equals(this.toolNames, other.toolNames)
 				&& Objects.equals(this.internalToolExecutionEnabled, other.internalToolExecutionEnabled)
 				&& Objects.equals(this.toolContext, other.toolContext);
+		// @formatter:on
 	}
 
 	// public Builder class exposed to users. Avoids having to deal with noisy generic
@@ -499,6 +547,10 @@ public class MistralAiChatOptions implements ToolCallingChatOptions, StructuredO
 
 		private @Nullable ToolChoice toolChoice;
 
+		private @Nullable PromptMode promptMode;
+
+		private @Nullable ReasoningEffort reasoningEffort;
+
 		public B model(MistralAiApi.@Nullable ChatModel chatModel) {
 			if (chatModel != null) {
 				this.model(chatModel.getName());
@@ -521,6 +573,16 @@ public class MistralAiChatOptions implements ToolCallingChatOptions, StructuredO
 
 		public B stop(@Nullable List<String> stop) {
 			super.stopSequences(stop);
+			return self();
+		}
+
+		public B promptMode(@Nullable PromptMode promptMode) {
+			this.promptMode = promptMode;
+			return self();
+		}
+
+		public B reasoningEffort(@Nullable ReasoningEffort reasoningEffort) {
+			this.reasoningEffort = reasoningEffort;
 			return self();
 		}
 
@@ -580,6 +642,12 @@ public class MistralAiChatOptions implements ToolCallingChatOptions, StructuredO
 				if (that.toolChoice != null) {
 					this.toolChoice = that.toolChoice;
 				}
+				if (that.promptMode != null) {
+					this.promptMode = that.promptMode;
+				}
+				if (that.reasoningEffort != null) {
+					this.reasoningEffort = that.reasoningEffort;
+				}
 			}
 			return self();
 		}
@@ -590,9 +658,9 @@ public class MistralAiChatOptions implements ToolCallingChatOptions, StructuredO
 			// TODO: add assertions, remove SuppressWarnings
 			// Assert.state(this.model != null, "model must be set");
 			return new MistralAiChatOptions(this.model, this.temperature, this.topP, this.maxTokens, this.safePrompt,
-					this.randomSeed, this.responseFormat, this.stopSequences, this.frequencyPenalty,
-					this.presencePenalty, this.n, this.tools, this.toolChoice, this.toolCallbacks, this.toolNames,
-					this.internalToolExecutionEnabled, this.toolContext);
+					this.randomSeed, this.responseFormat, this.stopSequences, this.promptMode, this.reasoningEffort,
+					this.frequencyPenalty, this.presencePenalty, this.n, this.tools, this.toolChoice,
+					this.toolCallbacks, this.toolNames, this.internalToolExecutionEnabled, this.toolContext);
 		}
 
 	}
