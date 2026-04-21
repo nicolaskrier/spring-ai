@@ -104,7 +104,6 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.content.Media;
 import org.springframework.ai.model.ModelOptionsUtils;
 import org.springframework.ai.model.tool.DefaultToolExecutionEligibilityPredicate;
-import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionEligibilityPredicate;
 import org.springframework.ai.model.tool.ToolExecutionResult;
@@ -284,14 +283,6 @@ public class BedrockProxyChatModel implements ChatModel {
 	@Override
 	public ChatOptions getDefaultOptions() {
 		return this.defaultOptions;
-	}
-
-	Prompt buildRequestPrompt(Prompt prompt) {
-		BedrockChatOptions runtimeOptions = (BedrockChatOptions) prompt.getOptions();
-		runtimeOptions = runtimeOptions == null ? this.defaultOptions : runtimeOptions;
-		ToolCallingChatOptions.validateToolCallbacks(runtimeOptions.getToolCallbacks());
-
-		return prompt.mutate().chatOptions(runtimeOptions).build();
 	}
 
 	ConverseRequest createRequest(Prompt prompt) {

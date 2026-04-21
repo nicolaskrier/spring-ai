@@ -652,7 +652,8 @@ public class AzureOpenAiChatModel implements ChatModel {
 		return list != null ? list : Collections.emptyList();
 	}
 
-	Prompt buildRequestPrompt(Prompt prompt) {
+	@Override
+	public Prompt buildRequestPrompt(Prompt prompt) {
 		// Process runtime options
 		AzureOpenAiChatOptions runtimeOptions = null;
 		if (prompt.getOptions() != null) {
