@@ -27,6 +27,7 @@ import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.params.ParameterizedTest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
@@ -78,6 +79,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * @author Christian Tzolov
  * @author Alexandros Pappas
  * @author Thomas Vitale
+ * @author Nicolas Krier
  * @since 0.8.1
  */
 @SpringBootTest(classes = MistralAiTestConfiguration.class)
@@ -150,6 +152,23 @@ class MistralAiChatModelIT {
 		Map<String, Object> result = outputConverter.convert(generation.getOutput().getText());
 		assertThat(result.get("numbers")).isEqualTo(Arrays.asList(1, 2, 3, 4, 5, 6, 7, 8, 9));
 
+	}
+
+	@ThinkingModelSource
+	@ParameterizedTest
+	void thinkingCall(MistralAiApi.ChatModel chatModel) {
+		var reasoningEffort = ThinkingModelUtils.provideReasoningEffort(chatModel);
+		var model = ThinkingModelUtils.provideChatModelValue(chatModel);
+		var chatOptions = MistralAiChatOptions.builder().model(model).reasoningEffort(reasoningEffort).build();
+		var systemMessage = new SystemMessage("You are a helpful assistant providing accurate short answers.");
+		var userMessage = new UserMessage(
+				"What is the first planet of the solar system based on the mass in descending order?");
+		var prompt = Prompt.builder().messages(systemMessage, userMessage).chatOptions(chatOptions).build();
+
+		var generation = this.chatModel.call(prompt).getResult();
+		assertThat(generation).isNotNull();
+		var outputText = generation.getOutput().getText();
+		assertThat(outputText).contains("Jupiter");
 	}
 
 	@Test
