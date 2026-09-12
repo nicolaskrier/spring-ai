@@ -53,6 +53,7 @@ import static org.mockito.Mockito.when;
  *
  * @author Christian Tzolov
  * @author Jewoo Shin
+ * @author Nicolas Krier
  */
 @ExtendWith(MockitoExtension.class)
 class StructuredOutputValidationAdvisorTests {
@@ -876,6 +877,30 @@ class StructuredOutputValidationAdvisorTests {
 		assertThat(advisor.getName()).isEqualTo("Structured Output Validation Advisor");
 	}
 
+	@Test
+	void testNoRetryWithToolCallsResponse() {
+		var chatClientRequest = createMockRequest();
+		var assistantMessage = AssistantMessage.builder()
+			.toolCalls(List.of(new AssistantMessage.ToolCall("id", "type", "name", "arguments")))
+			.build();
+		var chatClientResponse = createResponse(assistantMessage, new DefaultUsage(1, 2, 3));
+
+		var advisor = StructuredOutputValidationAdvisor.builder().outputType(Person.class).build();
+		int[] callCount = { 0 };
+		var terminalAdvisor = terminalAdvisor((request, chain) -> {
+			callCount[0]++;
+			return chatClientResponse;
+		});
+
+		var callChainAdvisor = DefaultAroundAdvisorChain.builder(ObservationRegistry.NOOP)
+			.pushAll(List.of(advisor, terminalAdvisor))
+			.build();
+
+		var chainedChatClientResponse = callChainAdvisor.nextCall(chatClientRequest);
+		assertThat(callCount[0]).isOne();
+		assertThat(chainedChatClientResponse).isEqualTo(chatClientResponse);
+	}
+
 	// Helper methods
 
 	private ChatClientRequest createMockRequest() {
@@ -895,7 +920,10 @@ class StructuredOutputValidationAdvisorTests {
 	}
 
 	private ChatClientResponse createResponse(String jsonOutput, Usage usage) {
-		AssistantMessage assistantMessage = new AssistantMessage(jsonOutput);
+		return createResponse(new AssistantMessage(jsonOutput), usage);
+	}
+
+	private ChatClientResponse createResponse(AssistantMessage assistantMessage, Usage usage) {
 		Generation generation = new Generation(assistantMessage);
 		ChatResponseMetadata metadata = ChatResponseMetadata.builder().usage(usage).build();
 		ChatResponse chatResponse = ChatResponse.builder().generations(List.of(generation)).metadata(metadata).build();

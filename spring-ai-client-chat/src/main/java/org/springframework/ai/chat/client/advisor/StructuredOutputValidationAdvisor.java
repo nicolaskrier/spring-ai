@@ -60,6 +60,7 @@ import org.springframework.util.StringUtils;
  *
  * @author Christian Tzolov
  * @author Jewoo Shin
+ * @author Nicolas Krier
  */
 public final class StructuredOutputValidationAdvisor implements CallAdvisor, StreamAdvisor {
 
@@ -121,15 +122,15 @@ public final class StructuredOutputValidationAdvisor implements CallAdvisor, Str
 		Assert.notNull(chatClientRequest, "chatClientRequest must not be null");
 
 		ChatClientResponse chatClientResponse = null;
-
-		boolean isValidationSuccess = false;
-
+		var isValidationSuccess = false;
+		var hasToolCalls = false;
 		var processedChatClientRequest = chatClientRequest;
+		var usageAccumulator = new UsageAccumulator();
 
-		UsageAccumulator usageAccumulator = new UsageAccumulator();
-
-		for (var currentAttemptNumber = 1 + this.maxRepeatAttempts; currentAttemptNumber > 0
-				&& !isValidationSuccess; currentAttemptNumber--) {
+		// We should not perform several attempts if there is a validation success or if
+		// there are tool calls.
+		for (var currentAttemptNumber = 1 + this.maxRepeatAttempts; currentAttemptNumber > 0 && !isValidationSuccess
+				&& !hasToolCalls; currentAttemptNumber--) {
 			// Next Call
 			chatClientResponse = callAdvisorChain.copy(this).nextCall(processedChatClientRequest);
 
@@ -137,9 +138,15 @@ public final class StructuredOutputValidationAdvisor implements CallAdvisor, Str
 			ChatResponse chatResponse = chatClientResponse.chatResponse();
 			usageAccumulator.addRoundResponse(chatResponse);
 
+			hasToolCalls = chatResponse != null && chatResponse.hasToolCalls();
+
+			if (hasToolCalls && logger.isDebugEnabled()) {
+				logger.debug("ChatResponse has tool calls.");
+			}
+
 			// We should not validate tool call requests, only the content of the final
 			// response.
-			if (chatResponse == null || !chatResponse.hasToolCalls()) {
+			if (chatResponse == null || !hasToolCalls) {
 				SchemaValidation validationResponse = validateOutputSchema(chatClientResponse,
 						currentAttemptNumber - 1);
 
